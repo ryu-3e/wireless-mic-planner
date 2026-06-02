@@ -1,5 +1,5 @@
 // Service Worker: オフライン用キャッシュ
-const CACHE_NAME = 'wmp-v1.9.4';
+const CACHE_NAME = 'wmp-v1.9.5';
 const ASSETS = [
   './',
   './index.html',
