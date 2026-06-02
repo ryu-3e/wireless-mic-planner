@@ -12,15 +12,11 @@
   const EXP = window.WMP_EXPORT;
   const ST = window.WMP_STORE;
 
-  // ----- State -----
-  let inventory = migrateInventory(ST.loadInventory()) || D.buildDefaultInventory();
-  let presets = ST.loadPresets() || [];
-  let settings = Object.assign({ imdTolerance: 0.025, adjacentLimit: 0.250 }, ST.loadSettings());
-
   // 旧バージョンの保存データの正規化
   //   - 受信機(RX) は本アプリでは扱わないため除去
   //   - 廃止モデル名 (WX-RB400 / WX-TB840 / UTX-B40 (UWP-D21)) は最新の主要3機種に自動マイグレーション
   //   - mode/occupiedWidth の補完
+  // ※ State の初期化 (下) より前に宣言する必要がある (TDZ 回避)
   const LEGACY_MODEL_MAP = {
     'WX-RB400': 'WX-TB841',
     'WX-TB840': 'WX-TB841',
@@ -49,6 +45,11 @@
         });
       });
   }
+
+  // ----- State -----
+  let inventory = migrateInventory(ST.loadInventory()) || D.buildDefaultInventory();
+  let presets = ST.loadPresets() || [];
+  let settings = Object.assign({ imdTolerance: 0.025, adjacentLimit: 0.250 }, ST.loadSettings());
 
   function persistAll() {
     ST.saveInventory(inventory);
