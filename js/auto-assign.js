@@ -15,6 +15,11 @@
   const D = global.WMP_DATA;
   const IMD = global.WMP_IMD;
 
+  // 計算量が爆発する構成 (例: 多波 + 厳しい固定) で UI がフリーズしないよう
+  // バックトラックの探索ノード上限を設ける。超えたら諦めて次戦略へ落とす。
+  const MAX_ITER_PER_PHASE = 200000;
+  let _iterCount = 0;
+
   // tx: [{ id, name, freq?(固定なら値), locked?: bool }]
   // 戻り値: { success, assignments: [{id, name, freq}], usedGroup: string|null, issues: [...] }
   function autoAssign(transmitters, options) {
@@ -147,8 +152,10 @@
   function tryAssignFromList(free, channels, fixed, opts) {
     const used = new Set();
     const stack = []; // [{id,name,freq,mode,occupiedWidth}]
+    _iterCount = 0;
 
     function backtrack(idx) {
+      if (_iterCount++ > MAX_ITER_PER_PHASE) return false; // タイムアウト相当
       if (idx === free.length) return true;
       const existing = fixed.concat(stack);
       // 既存から遠い順 (同距離は周波数昇順で安定化)
@@ -189,7 +196,9 @@
   function tryAssignRelaxed(free, channels, fixed) {
     const used = new Set();
     const stack = [];
+    _iterCount = 0;
     function backtrack(idx) {
+      if (_iterCount++ > MAX_ITER_PER_PHASE) return false;
       if (idx === free.length) return true;
       const existing = fixed.concat(stack);
       const candidates = channels.filter((c) => !used.has(c.n)).slice().sort((a, b) => {

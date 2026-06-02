@@ -561,23 +561,29 @@
       mode: t.mode || (D.MODELS[t.model] && D.MODELS[t.model].mode) || 'analog',
       occupiedWidth: t.occupiedWidth || (D.MODELS[t.model] && D.MODELS[t.model].occupiedWidth) || 0.110
     }));
-    const res = AUTO.autoAssign(params, settings);
-    if (!res.success && res.assignments.length === 0) {
-      alert('混信回避できる組合せが見つかりませんでした。台数を減らすか、設定の許容値を見直してください。');
-      return;
-    }
-    res.assignments.forEach((a) => {
-      const d = inventory.find((x) => x.id === a.id);
-      if (d) {
-        const ch = D.CHANNELS.find((c) => Math.abs(c.freq - a.freq) < 1e-6);
-        d.assignedCh = ch ? ch.n : null;
+    runWithLoading(
+      '自動割当を計算中...',
+      `${params.length}波の混信しない組合せを探しています`,
+      () => {
+        const res = AUTO.autoAssign(params, settings);
+        if (!res.success && res.assignments.length === 0) {
+          alert('混信回避できる組合せが見つかりませんでした。台数を減らすか、設定の許容値を見直してください。');
+          return;
+        }
+        res.assignments.forEach((a) => {
+          const d = inventory.find((x) => x.id === a.id);
+          if (d) {
+            const ch = D.CHANNELS.find((c) => Math.abs(c.freq - a.freq) < 1e-6);
+            d.assignedCh = ch ? ch.n : null;
+          }
+        });
+        persistAll();
+        renderAssign();
+        let msg = res.success ? '✓ 自動割当 完了' : '⚠ 一部のみ割当（IMD警告あり）';
+        if (res.usedGroup) msg += `（グループ: ${res.usedGroup}）`;
+        showToast(msg);
       }
-    });
-    persistAll();
-    renderAssign();
-    let msg = res.success ? '✓ 自動割当 完了' : '⚠ 一部のみ割当（IMD警告あり）';
-    if (res.usedGroup) msg += `（グループ: ${res.usedGroup}）`;
-    showToast(msg);
+    );
   }
 
   // ===================================================
@@ -895,39 +901,42 @@
       return;
     }
 
-    showToast('計算中...');
-    // 重い計算は次のティックに回す（UIの即時反映のため）
-    setTimeout(() => {
-      const res = AUTO.autoAssign(txs, settings);
+    const usable = txs.filter((t) => !t._blocked).length;
+    runWithLoading(
+      '自動割当を計算中...',
+      `アナログ${quick.analogCount}波 + デジタル${quick.digitalCount}波 (合計${usable}波) の組合せを探しています`,
+      () => {
+        const res = AUTO.autoAssign(txs, settings);
 
-      // 元の txs にあったメタ情報 (_blocked, _kind, name, mode) を結果にマージ
-      const enriched = res.assignments.map((a) => {
-        const orig = txs.find((t) => t.id === a.id);
-        return Object.assign({}, a, {
-          _blocked: orig && orig._blocked,
-          _kind: orig && orig._kind,
-          name: (orig && orig.name) || a.name,
-          mode: (orig && orig.mode) || a.mode || 'analog',
-          occupiedWidth: (orig && orig.occupiedWidth) || a.occupiedWidth
+        // 元の txs にあったメタ情報 (_blocked, _kind, name, mode) を結果にマージ
+        const enriched = res.assignments.map((a) => {
+          const orig = txs.find((t) => t.id === a.id);
+          return Object.assign({}, a, {
+            _blocked: orig && orig._blocked,
+            _kind: orig && orig._kind,
+            name: (orig && orig.name) || a.name,
+            mode: (orig && orig.mode) || a.mode || 'analog',
+            occupiedWidth: (orig && orig.occupiedWidth) || a.occupiedWidth
+          });
         });
-      });
 
-      quick.result = {
-        success: res.success,
-        usedGroup: res.usedGroup,
-        assignments: enriched,
-        issues: res.issues
-      };
-      renderQuick();
+        quick.result = {
+          success: res.success,
+          usedGroup: res.usedGroup,
+          assignments: enriched,
+          issues: res.issues
+        };
+        renderQuick();
 
-      // 「結果をクリア」「機材に反映」ボタンの結線
-      const clr = document.getElementById('q-clear-result');
-      if (clr) clr.onclick = () => { quick.result = null; renderQuick(); };
-      const apply = document.getElementById('q-apply-inv');
-      if (apply) apply.onclick = applyQuickToInventory;
+        // 「結果をクリア」「機材に反映」ボタンの結線
+        const clr = document.getElementById('q-clear-result');
+        if (clr) clr.onclick = () => { quick.result = null; renderQuick(); };
+        const apply = document.getElementById('q-apply-inv');
+        if (apply) apply.onclick = applyQuickToInventory;
 
-      showToast(res.success ? '✓ 計算完了' : '⚠ 警告ありの結果');
-    }, 50);
+        showToast(res.success ? '✓ 計算完了' : '⚠ 警告ありの結果');
+      }
+    );
   }
 
   // クイック設計の結果を送信機インベントリに「上書き反映」する
@@ -1267,6 +1276,41 @@
     t.textContent = msg;
     t.classList.add('show');
     setTimeout(() => t.classList.remove('show'), 2200);
+  }
+
+  // 自動割当などの重い計算中に画面全体に表示するロード中オーバーレイ。
+  // setTimeout で UI を一旦再描画させてから重い処理を回すヘルパー。
+  function showLoading(title, sub) {
+    let el = document.getElementById('loading-overlay');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'loading-overlay';
+      el.className = 'loading-overlay';
+      el.innerHTML = `
+        <div class="loading-box">
+          <div class="loading-spinner" aria-hidden="true"></div>
+          <div class="loading-title"></div>
+          <div class="loading-sub"></div>
+          <div class="loading-tip">※ 通常は数秒で完了します</div>
+        </div>
+      `;
+      document.body.appendChild(el);
+    }
+    el.querySelector('.loading-title').textContent = title || '計算中...';
+    el.querySelector('.loading-sub').textContent = sub || '';
+    el.classList.add('show');
+  }
+  function hideLoading() {
+    const el = document.getElementById('loading-overlay');
+    if (el) el.classList.remove('show');
+  }
+  // showLoading → setTimeout → fn() → hideLoading をまとめた便利関数
+  function runWithLoading(title, sub, fn) {
+    showLoading(title, sub);
+    // 30ms 待ってブラウザに描画させてから計算開始
+    setTimeout(() => {
+      try { fn(); } finally { hideLoading(); }
+    }, 30);
   }
 
   function escape(s) {
